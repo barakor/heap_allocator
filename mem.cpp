@@ -89,93 +89,141 @@ pointer to next page: 8 bytes;
 void *gHeap = (void *) nullptr;
 
 
-
-
 unsigned int calc_needed_page_size(unsigned int size){
     unsigned int page_header_size = 6 * sizeof(unsigned int) + sizeof (void *);
     unsigned int base_page_size = 4096;  // 4kb
-
-    return (((size + page_header_size) / base_page_size) + 1 ) * base_page_size;
+    unsigned interest = ((size + page_header_size) % base_page_size) ? 1 : 0;
+    return (((size + page_header_size) / base_page_size) + interest ) * base_page_size;
 }
 
 
+unsigned int get_block_size(void *ptr){
+    unsigned int size = ((unsigned int *)ptr)[0];
+    size = size & ~1;
+    return size;
+}
+
+
+void *get_next_block(void *ptr){
+    unsigned int block_size = get_block_size(ptr);
+    char *cp = (char *)ptr;
+    return cp + (2 * sizeof(unsigned int)) + block_size;
+}
+
+void *get_next_page(void *ptr){
+    unsigned int block_size = get_block_size(ptr);
+    char *cp = (char *)ptr;
+    return (void *)(((int **)(cp + block_size - 8))[0]);
+}
+
 void print_block_as_uint(void *ptr){
-    unsigned int *uip = (unsigned int *)ptr ;
-    unsigned int page_size = uip[0];
+    unsigned int *block_start = (unsigned int *)ptr ;
+    unsigned int block_size = get_block_size(block_start);
     std::cout << std::endl;
-    for (int i = 0; i < page_size/sizeof(unsigned int); ++i) {
-        std::cout << uip[i] << " ";
+    for (int i = 0; i < block_size/sizeof(unsigned int); ++i) {
+        std::cout << block_start[i] << " ";
     }
     std::cout << std::endl;
 }
 
 
+void mark_block_allocated(void *ptr){
+    unsigned int *block_start = (unsigned int *)ptr;
+    unsigned int block_size = get_block_size(ptr);
+    unsigned int *block_end = (unsigned int *)((char *)(block_start + 1) + block_size);
+    block_start[0] = block_size + 1;
+    block_end[0] = block_size + 1;
+}
+
+
+void mark_block_free(void *ptr){
+    unsigned int *block_start = (unsigned int *)ptr;
+    unsigned int block_size = get_block_size(ptr);
+    unsigned int *block_end = (unsigned int *)((char *)(block_start + 1) + block_size);
+    block_start[0] = block_size;
+    block_end[0] = block_size;
+}
+
+
+bool check_block_allocated(void *ptr){
+    unsigned int block_marker = ((unsigned int *)ptr)[0];
+    bool allocated = block_marker & 1;
+    return allocated ;
+}
+
+
+void setup_block(void *ptr, unsigned int size){
+    unsigned int *block_start = (unsigned int *)ptr;
+    unsigned int *block_end = (unsigned int *)((char *)(block_start + 1) + size);
+    block_start[0] = size;
+    block_end[0] = size;
+}
+
 void init_heap_page(void *ptr, unsigned int page_size){
     unsigned int page_header_size = 6 * sizeof(unsigned int) + sizeof (void *);
+
     // Create two void pointers
     int **glob_heap = (int **) &gHeap;
     
     unsigned int block_size = page_size-page_header_size;
-    unsigned int block_size_bytes = block_size/sizeof(unsigned int);
 
-    std::cout << "address of heap page: " << ptr << std::endl;
-    std::cout << "size of heap page header: " << page_header_size << std::endl;
-    char *page_pointer_char = (char *) ptr; 
-    unsigned int *uip = (unsigned int *)ptr ;
-    unsigned int *uip_end = (uip + 3 + block_size_bytes);
-    int **heap_page_end = (int **) (uip_end + 3);
+    unsigned int *page_start = (unsigned int *)ptr ;
+    unsigned int *block_end = page_start + 3 + (block_size/sizeof(unsigned int));
+    int **heap_page_end = (int **) &block_end[3];
 
-    uip[0] = page_size;
-    uip[1] = 0;
-    uip[2] = block_size; 
-    uip_end[0] = block_size;
-    uip_end[1] = 0;
-    uip_end[2] = page_size;
+    page_start[0] = page_size;
+    page_start[1] = 0;
+    setup_block(&page_start[2], block_size);
+    block_end[1] = 0;
+    block_end[2] = page_size - sizeof(void *); // actually 8 bytes smaller because of the pointer at the end
     heap_page_end[0] =  (int *) gHeap;
-    //reassign the first heap page to be the new heap page
-    std::cout << "address of glob_heap: " << gHeap << std::endl;
-    glob_heap[0] = (int *) ptr;
-    std::cout << "address of glob_heap: " << gHeap << std::endl;
 
-    // Print the contents of the memory
-    print_block_as_uint(ptr);
+    //reassign the first heap page to be the new heap page
+    glob_heap[0] = (int *) ptr;
+    
 }
+
 
 
 void * partition_heap_block(void *ptr, unsigned int partition_size){
     /* 
-    if there isn't enought room to partition the block, we will give all of it - 
-        it's better to leave a few bytes (up to 7) unused than failing
-        this will happend if the block size is 12 and the user asked for 10, for example
+    a block has to have at least sizeof(unsigned int) bytes, and must be a multiple of sizeof(unsigned int);
+
+    if there isn't enought room to partition the block in a way that the other partition is at least 8 bytes, 
+    we will give all of it -
+        it's better to leave a few bytes unused than failing
+        this will happen if the block size is 12 and the user asked for 10, for example
     */
+
     unsigned int block_header_size = 2*(sizeof(unsigned int));
+
     char *cp = (char *)ptr;
-    unsigned int *uip = (unsigned int *)ptr;
-    unsigned int block_size = uip[0];
+    unsigned int *left_block_starter = (unsigned int *)ptr;
+    unsigned int block_size = get_block_size(left_block_starter);
+
 
     if (block_size < partition_size){
         return (void *)-1;
     }
     if ((block_size == partition_size) || (block_size < partition_size+(2*block_header_size))){
-        return &uip[1];
+        return &left_block_starter[1];
     }
     
-    unsigned int * left_block_ender = (unsigned int *) (cp+ sizeof(unsigned int) + partition_size);
-    uip[0] = partition_size;
-    left_block_ender[0] = partition_size;
+    unsigned int interest = (partition_size % sizeof(unsigned int)) ? 1 : 0;
+    unsigned int left_block_size = (partition_size/sizeof(unsigned int) + interest ) * sizeof(unsigned int);
+
+    setup_block(ptr, left_block_size);
+
+    unsigned int * right_block_start = (unsigned int *) (cp + sizeof(unsigned int) + left_block_size) + 1;
+    unsigned int right_block_size = block_size - (left_block_size + block_header_size);
+    setup_block(right_block_start, right_block_size);
 
 
-    unsigned int right_block_size = block_size - (partition_size + (2*block_header_size));
-    unsigned int * right_block_start = &left_block_ender[1];
-    unsigned int * right_block_end = (unsigned int *)(((char *) right_block_start) + sizeof(unsigned int) + right_block_size);
-    right_block_start[0] = right_block_size;
-    right_block_end[0] = right_block_size;
-
-    return (void *)&uip[1];
+    return &left_block_starter[1];
 }
 
 
-void *heap_allocate(unsigned int size){
+void *page_allocate(unsigned int size){
     void* memory = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (memory == MAP_FAILED) {
         std::cout << "mmap failed" << std::endl;
@@ -186,7 +234,7 @@ void *heap_allocate(unsigned int size){
 }
 
 
-void heap_free(void* ptr){
+void page_free(void* ptr){
     unsigned int page_size;
     if (munmap(ptr, 4096) == -1) {
         std::cout << "munmap failed" << std::endl;
@@ -195,94 +243,103 @@ void heap_free(void* ptr){
 
 void *find_best_fit_block_in_page(void *page_ptr, unsigned int size){
     // iterate over a page looking for the best block to allocate, would return a pointer - 
-
     void *best_fit_block = nullptr;
     unsigned int best_fit_block_size_difference = -1; // highest int because it's unsigned
     bool reached_end_of_page = false;
 
-    char *block = (char *)(&((unsigned int *)page_ptr)[2]);
+    void *block = (void *)(&((unsigned int *)page_ptr)[2]);
     unsigned int block_size;
 
     while (!reached_end_of_page){
-        block_size = ((unsigned int *)block)[0];
-
+        block_size = get_block_size(block);
         if (block_size == 0){
             reached_end_of_page = true;
         }
-        else if (block_size == size) {
+        else if ((block_size == size) 
+                 && (!check_block_allocated(block))) {
                 return (void *)block;
         }
-        else if ((block_size > size) && (block_size - size <  best_fit_block_size_difference)){
+        else if ((!check_block_allocated(block))
+                 && (block_size > size) 
+                 && (best_fit_block_size_difference > block_size - size)){
             best_fit_block = block;
             best_fit_block_size_difference = block_size - size;
         }
 
         //advance the block
-        block = block + block_size;
+        block = get_next_block(block);
     }
     
     if (best_fit_block==nullptr){
         return (void *) -1;
     }
     
-    partition_heap_block(best_fit_block, size);
     return best_fit_block;
 }
 
 void *find_best_fit_block(unsigned int size){
     // iterate over all pages looking for the best block to allocate
     void *best_fit_block = (void *)-1;
+    void *page = gHeap;
 
-
-
+    while (page!=nullptr){
+        best_fit_block = find_best_fit_block_in_page(page, size);
+        if (best_fit_block!=(void *)-1){
+            return best_fit_block;
+        }
+        page = get_next_page(page);
+    }
 
     return best_fit_block;
 }
 
 
 void *halloc(unsigned int size){
-    void *memory = find_best_fit_block(size);
-    if (memory == (void *)-1) {
+    void *block = find_best_fit_block(size);
+    if (block == (void *)-1) {
         //allocate new page
         unsigned int page_size = calc_needed_page_size(size) ;
         std::cout << "requesting a new heap page of the size: " << page_size << " bytes"  << std::endl;
         
-        void* new_heap = heap_allocate(page_size);
+        void* new_heap = page_allocate(page_size);
         std::cout << "got address: " << new_heap  << std::endl;
         init_heap_page(new_heap, page_size);
-
-        void* block = find_best_fit_block_in_page(new_heap, size);
         
-        print_block_as_uint(new_heap);
-        
+        block = find_best_fit_block_in_page(new_heap, size);
+        partition_heap_block(block, size);
+        mark_block_allocated(block);
 
-        return new_heap; // delete me
-
-        // return block;
+        return block;
     }
-    return memory;
+    partition_heap_block(block, size);
+    mark_block_allocated(block);
+    return block;
 }
 
 
 int main() {
     
     // Size of the memory region to map (in bytes)
-    unsigned int size = 2880 ; 
+    unsigned int size = 4048 ; 
     
 
-    std::cout << "requested page size: " << size << std::endl;
-    std::cout << "needed page size: " << calc_needed_page_size(size) << std::endl;
 
-    std::cout << "sizeof int: " << sizeof(int) << std::endl;
-    std::cout << "sizeof unsigned int: " << sizeof(unsigned int) << std::endl;
-    std::cout << "sizeof size_t: " << sizeof(size_t) << std::endl;
-
-
-    void* pt = halloc(size);
+    void* pt = halloc(40);
     std::cout << "address of memblock: " << pt << std::endl;
-    
-    
+    print_block_as_uint(gHeap);
 
+    void* pt1 = halloc(900);
+    std::cout << "address of memblock: " << pt1 << std::endl;
+    print_block_as_uint(gHeap);
+
+
+
+    void* pt2 = halloc(3888);
+    std::cout << "address of memblock: " << pt2 << std::endl;
+    print_block_as_uint(gHeap);
+
+
+    std::cout << "address of glob_heap: " << gHeap << std::endl;
 
 
 
@@ -326,7 +383,9 @@ int main() {
 
     // std::cout << std::endl;
     // std::cout << heap_page_end[0];
-    
+    unsigned int t = 12+ 1;
+    t = t & 1;
+    std::cout << t << std::endl;
     std::cout << std::endl;
     return 0;
 }
