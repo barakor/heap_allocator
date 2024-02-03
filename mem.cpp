@@ -7,7 +7,7 @@
 
 
 /* essentialy we would start by allocating the minimum required memory based on a request, considering a page is 4096 bytes so 5000 bytes would actually result in 8192 bytes allocated 
-   If our page is empty after a release a block from, indicated by the page header being equal to the next block header - sizeof(page header)
+   If our page is empty after a release a block from, 
    we release it back with munmap
 
    to keep track of the different pages allocated, each heap page's last 8 bytes will be a pointer to the next heap page 
@@ -17,79 +17,37 @@
    so when the first block checks what's the size of the block before it
         or the last block checks what's the size of the block after it
    it gets 0 signaling it's the end of the page, (followed by the size of the page, and a pointer to the next page )
+   
 
+   block structure = 
+   {
+    size of block: word_size bytes;
+    data: size_of_block bytes;
+    size of block: word_size bytes;
+   }
+
+   word_size = sizeof(unsigned int)
    heap page = 
    {
-    /////////pointer to last page: 8 bytes;
-    size of page: heap_word_size bytes;
-    padding: heap_word_size bytes (all 0);
-    actual heap: (size of page) - (4 * (heap_word_size))
-    padding: heap_word_size bytes (all 0);
-    size of page: heap_word_size bytes;
-    pointer to next page: 8 bytes;
+    pointer to previous page: pointer_size bytes;                    // only used for relinking pages when a page is freed
+    size of page: word_size bytes;                                   // used to get the size of the page 
+    padding: word_size bytes (all 0);                                // used to detect the end of the heap block segment
+    actual heap: (size of page) - (6*(word_size) + 2*(pointer_size)  // the actual area allocated when requested
+    padding: word_size bytes (all 0);                                // used to detect the end of the heap block segment
+    size of page: word_size bytes;                                   // kept for symmetrical purposes
+    pointer to next page: pointer_size bytes;                        // used to get to the next (older) page
     }
-        
-    so when a request for memory is entered, we actually need to add to it ((6 * heap_word_size) + 16) bytes
-    4 heap_word_size: for the page header and padding
-    2 heap_word_size: for the first heap block headers (after which the heap could be full...)
-    16 bytes: for 2 pointers to to the next and last pages
+
+
+    the size of the page at the end of the page isn't actually used, it costs 4 bytes (when word_size=4), which is at most 0.1% of the page size, so I decided to keep it for symmetrical purposes purposes. 
 */
 
-
-/* structure of my heap
-    
-    {size of block: heap_word_size bytes; 
-     actual data: requested size;
-     size of block: heap_word_size bytes; 
-     }
-     so when a request for memory is entered, 
-
-
-
-
-
-1) allocate (mmap) the needed amount of pages (4096 bytes each) for the requested memory (if none available yet)
-    1.1) intialize the memory, the very first X (4 for 4gb, 5 for 1tb, 6 for 281tb... this is just a coding practice, 4 is enough.) bytes represent the size of the block  (this means the implementation is limited to max block size of 2**(8*x))
-            - because the last bit is always 0 (becuase it's divsible by 2) the last bit of the "header" represents weather it's allocated or not
-            also change the value for the last X bytes to be the same, this is a not perfect way to make sure that the ptr we get for `free` is valid
-2) assign the requested memory, so {,  }
-
-if a block is completley empty, we set it free. 
-if 
-
-*/
-/*
-
-padding: heap_word_size bytes (all 0);
-size of page: heap_word_size bytes;
-pointer to next page: 8 bytes;
-*/
-
-
-
-
-// struct heap_block{
-//     unsigned int block_size = 0;
-
-//     char data[] ;
-// };
-
-// struct heap_page{
-//     heap_page * last_page = nullptr; // pointer to last page: 8 bytes;
-//     unsigned int page_size = 0;// size of page: heap_word_size bytes;
-//     unsigned int heap_start_padding = 0; // padding: heap_word_size bytes (all 0);
-//     heap_block heap; // the actual heap 
-//     unsigned int heap_end_padding = 0; // padding: heap_word_size bytes (all 0);
-//     unsigned int page_end_size_end = 0;// size of page: heap_word_size bytes;
-//     heap_page * next_page = nullptr;// pointer to next page
-// };
-
-
-
+// the pointer to the start of our heap
 void *gHeap = (void *) -1;
 
 
 unsigned int calc_needed_page_size(unsigned int size){
+    // given a size in bytes, calculate how many bytes are needed to be asked from the OS to allocate a block
     unsigned int page_header_size = 6 * sizeof(unsigned int) + 2 * sizeof (void *);
     unsigned int base_page_size = 4096;  // 4kb
     unsigned interest = ((size + page_header_size) % base_page_size) ? 1 : 0;
@@ -98,58 +56,92 @@ unsigned int calc_needed_page_size(unsigned int size){
 
 
 unsigned int get_page_size(void *ptr){
+    // returns the size of the page in bytes
     return ((unsigned int *)ptr)[2];
 }
 
 
 unsigned int get_block_size(void *ptr){
+    // returns the size of the block in bytes, ignoring the allocation bit marker
     unsigned int size = ((unsigned int *)ptr)[0];
     size = size & ~1;
     return size;
 }
 
 
+unsigned int get_prev_block_size(void *ptr){
+    // returns the size of the previous block in bytes, ignoring the allocation bit marker
+    unsigned int *prev_block_end = ((unsigned int *)ptr) -1;
+    return get_block_size(prev_block_end);
+}
+
+
 void *get_next_block(void *ptr){
+    // returns a pointer to the next block
     unsigned int block_size = get_block_size(ptr);
     char *cp = (char *)ptr;
     return cp + (2 * sizeof(unsigned int)) + block_size;
 }
 
-unsigned int get_prev_block_size(void *ptr){
-    unsigned int *prev_block_end = ((unsigned int *)ptr) -1;
-    return get_block_size(prev_block_end);
-}
 
 void *get_prev_block(void *ptr){
+    // returns a pointer to the previous block
     unsigned int *prev_block_end = ((unsigned int *)ptr) -1;
     unsigned int block_size = get_block_size(prev_block_end);
     char *cp = (char *)prev_block_end;
     return cp - (block_size  + sizeof(unsigned int));
 }
 
+
+void *get_first_block_in_page(void *ptr){
+    // get the first block in allocation segment of a page
+    return (((char *)ptr )+(2 * sizeof(unsigned int)) + (sizeof(unsigned int *)));
+}
+
+
 void *get_next_page(void *ptr){
+    // returns a pointer to the next page
     unsigned int block_size = get_page_size(ptr);
     char *cp = (char *)ptr;
     return (void *)(((int **)(cp + block_size - 8))[0]);
 }
 
+
 void *get_prev_page(void *ptr){
+    // returns a pointer to the previous page
     return (void *)(((int **)ptr)[0]);
 }
 
 
+void *get_page_ptr(void *block){
+    // given a pointer to a block in a page, return the pointer to start of the page
+    unsigned int block_size;
+    while(true){
+        if (get_prev_block_size(block) == 0){
+            return (unsigned int *)block - 4;
+        }
+        block = get_prev_block(block);
+    }
+}
+
+
 void set_next_page_ptr(void *page_ptr, void *next_page_ptr){
+    // set the pointer to the next page in the page
     unsigned int page_size = get_page_size(page_ptr);
     int **page_end = (int **) (((char *)page_ptr) + page_size - sizeof(int *));
     page_end[0] =  (int *) next_page_ptr;
 }
 
+
 void set_prev_page_ptr(void *page_ptr, void *prev_page_ptr){
+    // set the pointer to the prev page in the page
     int **page_start = (int **) page_ptr;
     page_start[0] = (int *)prev_page_ptr;
 }
 
+
 void print_page_as_uint(void *ptr){
+    // prints the page as if it was an array of unsigned int
     unsigned int *block_start = (unsigned int *)ptr ;
     unsigned int block_size = get_page_size(block_start);
     for (int i = 0; i < block_size/sizeof(unsigned int); ++i) {
@@ -158,7 +150,9 @@ void print_page_as_uint(void *ptr){
     std::cout << std::endl;
 }
 
+
 void print_block_as_uint(void *ptr){
+    // prints the block as if it was an array of unsigned int
     unsigned int *block_start = (unsigned int *)ptr ;
     unsigned int block_size = get_block_size(block_start);
     for (int i = 0; i < block_size/sizeof(unsigned int); ++i) {
@@ -169,7 +163,7 @@ void print_block_as_uint(void *ptr){
 
 
 void print_all_pages_as_uint(){
-    // iterate over all pages and print them
+    // iterate over all pages and print them as if they were an array of unsigned int
     std::cout << std::endl;
     std::cout << "printing all pages:" << std::endl;
     void *page = gHeap;
@@ -181,7 +175,9 @@ void print_all_pages_as_uint(){
     }
 }
 
+
 void mark_block_allocated(void *ptr){
+    // mark a block as allocated by flipping the rightmost bit of the size marker to 1
     unsigned int *block_start = (unsigned int *)ptr;
     unsigned int block_size = get_block_size(ptr);
     unsigned int *block_end = (unsigned int *)((char *)(block_start + 1) + block_size);
@@ -191,6 +187,7 @@ void mark_block_allocated(void *ptr){
 
 
 void mark_block_free(void *ptr){
+    // mark a block as free by flipping the rightmost bit of the size marker to 0
     unsigned int *block_start = (unsigned int *)ptr;
     unsigned int block_size = get_block_size(ptr);
     unsigned int *block_end = (unsigned int *)((char *)(block_start + 1) + block_size);
@@ -200,20 +197,79 @@ void mark_block_free(void *ptr){
 
 
 bool check_block_allocated(void *ptr){
+    // check if a block is allocated by checking the rightmost bit of the size marker 0->free, 1->allocated 
     unsigned int block_marker = ((unsigned int *)ptr)[0];
     bool allocated = block_marker & 1;
     return allocated ;
 }
 
 
+bool check_page_allocated(void *page_ptr){
+    // checks weather a page has any allocated blocks
+    void *block = get_first_block_in_page(page_ptr);
+    unsigned int block_size;
+    bool reached_end_of_page = false;
+    while (!reached_end_of_page){
+        if (check_block_allocated(block)){
+            return true;
+        }
+
+        //advance the block
+        block = get_next_block(block);
+        block_size = get_block_size(block);
+        if (block_size == 0){
+            reached_end_of_page = true;
+        }
+    }
+    return false;
+}
+
+
 void setup_block(void *ptr, unsigned int size){
+    // set the size markers of a block
     unsigned int *block_start = (unsigned int *)ptr;
     unsigned int *block_end = (unsigned int *)((char *)(block_start + 1) + size);
     block_start[0] = size;
     block_end[0] = size;
 }
 
+
+void coalesce_block_leftward(void *ptr){
+    // merge block with the block previous to it, if there is one
+    unsigned int prev_block_size = get_prev_block_size(ptr);
+    unsigned int block_size = get_block_size(ptr);
+    if (prev_block_size!=0){
+        setup_block(get_prev_block(ptr), prev_block_size+block_size);
+    }
+}
+
+
+void coalesce_block_rightward(void *ptr){
+    // merge block with the block next to it, if there is one
+    unsigned int block_size = get_block_size(ptr);
+    unsigned int next_block_size = get_block_size(get_next_block(ptr));
+    if (next_block_size!=0){
+        setup_block(ptr, block_size+next_block_size);
+    }
+}
+
+
+void coalesce_block(void *ptr){
+    // checks if the blocks on either sides of the block are free, if they are merge them; 
+    void *prv_block = get_prev_block(ptr);
+    void *next_block = get_next_block(ptr);
+
+    if (!check_block_allocated(get_next_block(ptr))){
+        coalesce_block_rightward(ptr);
+    }
+    if (!check_block_allocated(get_prev_block(ptr))){
+        coalesce_block_leftward(ptr);
+    }
+}
+
+
 void init_heap_page(void *ptr, unsigned int page_size){
+    // sets the header values needed for the page bookkeeping, as well as inserting it to the top of the heap's linked list
     unsigned int page_header_size = (6 * sizeof(unsigned int)) + (2 * sizeof (void *));
 
     // Create two void pointers    
@@ -228,7 +284,7 @@ void init_heap_page(void *ptr, unsigned int page_size){
     page_start[1] = 0;
     setup_block(&page_start[2], block_size);
     block_end[1] = 0;
-    block_end[2] = page_size - sizeof(void *); // actually 8 bytes smaller because of the pointer at the end
+    block_end[2] = page_size;
     set_next_page_ptr(ptr, gHeap);
 
     if (gHeap!= (void *)-1){
@@ -243,10 +299,11 @@ void init_heap_page(void *ptr, unsigned int page_size){
 
 
 void * partition_heap_block(void *ptr, unsigned int partition_size){
+    // partitions a block into 2 when possible
     /* 
     a block has to have at least sizeof(unsigned int) bytes, and must be a multiple of sizeof(unsigned int);
 
-    if there isn't enought room to partition the block in a way that the other partition is at least 8 bytes, 
+    if there isn't enought room to partition the block in a way that the other partition is at least 2*sizeof(unsigned int) bytes,
     we will give all of it -
         it's better to leave a few bytes unused than failing
         this will happen if the block size is 12 and the user asked for 10, for example
@@ -281,6 +338,7 @@ void * partition_heap_block(void *ptr, unsigned int partition_size){
 
 
 void *page_allocate(unsigned int size){
+    // asks the OS for memory, used to get a new page
     void* memory = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (memory == MAP_FAILED) {
         std::cout << "mmap failed" << std::endl;
@@ -292,18 +350,16 @@ void *page_allocate(unsigned int size){
 
 
 void page_free(void* ptr){
-    unsigned int page_size;
-    if (munmap(ptr, 4096) == -1) {
+    // mark the page as free for the OS. 
+    unsigned int page_size = get_page_size(ptr);
+    if (munmap(ptr, page_size) == -1) {
         std::cout << "munmap failed" << std::endl;
     }
 }
 
-void *get_first_block_in_page(void *ptr){
-    return (void *)(&((unsigned int *)ptr)[4]);
-}
 
 void *find_best_fit_block_in_page(void *page_ptr, unsigned int size){
-    // iterate over a page looking for the best block to allocate, would return a pointer - 
+    // iterate over a page looking for the best block to allocate, would return a pointer to the best fitting block if one is found, otherwise a -1 pointer signaling an error
     void *best_fit_block = (void *)-1;
     unsigned int best_fit_block_size_difference = -1; // highest int because it's unsigned
     bool reached_end_of_page = false;
@@ -338,6 +394,7 @@ void *find_best_fit_block_in_page(void *page_ptr, unsigned int size){
     return best_fit_block;
 }
 
+
 void *find_best_fit_block(unsigned int size){
     // iterate over all pages looking for the best block to allocate
     void *block;
@@ -364,8 +421,9 @@ void *find_best_fit_block(unsigned int size){
     return best_fit_block;
 }
 
+
 void *find_first_fit_block_in_page(void *page_ptr, unsigned int size){
-    // iterate over a page looking for the best block to allocate, would return a pointer - 
+    // iterate over a page looking for the first block that is big enough, returns -1 pointer if not found
     void *fit_block = (void *)-1;
     bool reached_end_of_page = false;
 
@@ -385,13 +443,12 @@ void *find_first_fit_block_in_page(void *page_ptr, unsigned int size){
         }
     }
     
-    
     return (void *) -1;
 }
 
 
 void *find_first_fit_block(unsigned int size){
-    // iterate over all pages looking for the best block to allocate
+    // iterate over all pages looking for the first block suitable for allocation
     void *best_fit_block = (void *)-1;
     void *page = gHeap;
 
@@ -406,7 +463,9 @@ void *find_first_fit_block(unsigned int size){
     return best_fit_block;
 }
 
+
 void *halloc(unsigned int size){
+    // search for a (best) fitting block in existing pages, if one isn't found, request a new page for it 
     void *block = find_best_fit_block(size);
     if (block == (void *)-1) {
         //allocate new page
@@ -425,45 +484,8 @@ void *halloc(unsigned int size){
 }
 
 
-bool check_page_allocated(void *page_ptr){
-    void *block = get_first_block_in_page(page_ptr);
-    unsigned int block_size;
-    bool reached_end_of_page = false;
-    while (!reached_end_of_page){
-        if (check_block_allocated(block)){
-            return true;
-        }
-
-        //advance the block
-        block = get_next_block(block);
-        block_size = get_block_size(block);
-        if (block_size == 0){
-            reached_end_of_page = true;
-        }
-    }
-    return false;
-}
-
-void *get_page_ptr(void *block){
-    unsigned int block_size;
-    while(true){
-        if (get_prev_block_size(block) == 0){
-            return (unsigned int *)block - 4;
-        }
-        block = get_prev_block(block);
-    }
-}
-
-void coalesce_block_leftward(void *ptr){
-    unsigned int prev_block_size = get_prev_block_size(ptr);
-    unsigned int block_size = get_block_size(ptr);
-    if (prev_block_size!=0){
-        setup_block(get_prev_block(ptr), prev_block_size+block_size);
-    }
-}
-
-
 void hfree(void *ptr){
+    // free a block, if it's the only allocated block in a page, free the page and relink the previous and next pages
     mark_block_free(ptr);
     void *page_ptr = get_page_ptr(ptr);
     
@@ -485,7 +507,7 @@ void hfree(void *ptr){
         page_free(page_ptr);
     }
     else{
-        coalesce_block_leftward(ptr);
+        coalesce_block(ptr);
     }
 }
 
