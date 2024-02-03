@@ -110,6 +110,13 @@ void *get_next_block(void *ptr){
     return cp + (2 * sizeof(unsigned int)) + block_size;
 }
 
+void *get_prev_block(void *ptr){
+    unsigned int *prev_block_end = ((unsigned int *)ptr) -1;
+    unsigned int block_size = get_block_size(prev_block_end);
+    char *cp = (char *)prev_block_end;
+    return cp - (block_size  + sizeof(unsigned int));
+}
+
 void *get_next_page(void *ptr){
     unsigned int block_size = get_block_size(ptr);
     char *cp = (char *)ptr;
@@ -248,18 +255,14 @@ void *find_best_fit_block_in_page(void *page_ptr, unsigned int size){
     bool reached_end_of_page = false;
 
     void *block = (void *)(&((unsigned int *)page_ptr)[2]);
-    unsigned int block_size;
+    unsigned int block_size = get_block_size(block);
 
     while (!reached_end_of_page){
-        block_size = get_block_size(block);
-        if (block_size == 0){
-            reached_end_of_page = true;
-        }
-        else if ((block_size == size) 
+        if ((block_size == size) 
                  && (!check_block_allocated(block))) {
                 return (void *)block;
         }
-        else if ((!check_block_allocated(block))
+        if ((!check_block_allocated(block))
                  && (block_size > size) 
                  && (best_fit_block_size_difference > block_size - size)){
             best_fit_block = block;
@@ -268,6 +271,10 @@ void *find_best_fit_block_in_page(void *page_ptr, unsigned int size){
 
         //advance the block
         block = get_next_block(block);
+        block_size = get_block_size(block);
+        if (block_size == 0){
+            reached_end_of_page = true;
+        }
     }
     
     if (best_fit_block==nullptr){
@@ -315,6 +322,42 @@ void *halloc(unsigned int size){
     mark_block_allocated(block);
     return block;
 }
+
+
+bool check_page_allocated(void *page_ptr){
+    void *block = (void *)(&((unsigned int *)page_ptr)[2]);
+    unsigned int block_size;
+    bool reached_end_of_page = false;
+    while (!reached_end_of_page){
+        if (check_block_allocated(block)){
+            return true;
+        }
+
+        //advance the block
+        block = get_next_block(block);
+        block_size = get_block_size(block);
+        if (block_size == 0){
+            reached_end_of_page = true;
+        }
+    }
+    return false;
+}
+
+void *get_page_ptr(void *block_ptr){
+    
+}
+
+void hfree(void *ptr){
+    mark_block_free(ptr);
+    void *page_ptr = get_page_ptr(ptr);
+    if (!check_page_allocated(page_ptr)){
+        page_free(page_ptr);
+    }
+    else{
+        coalesce_block_left(ptr);
+    }
+}
+
 
 
 int main() {
