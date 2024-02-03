@@ -405,15 +405,24 @@ void *get_page_ptr(void *block){
     }
 }
 
+void coalesce_block_leftward(void *ptr){
+    unsigned int prev_block_size = get_prev_block_size(ptr);
+    unsigned int block_size = get_block_size(ptr);
+    if (prev_block_size!=0){
+        setup_block(get_prev_block(ptr), prev_block_size+block_size);
+    }
+}
+
+
 void hfree(void *ptr){
     mark_block_free(ptr);
     void *page_ptr = get_page_ptr(ptr);
     if (!check_page_allocated(page_ptr)){
         page_free(page_ptr);
     }
-    // else{
-    //     // coalesce_block_leftward(ptr);
-    // }
+    else{
+        coalesce_block_leftward(ptr);
+    }
 }
 
 
