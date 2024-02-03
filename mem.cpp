@@ -90,10 +90,15 @@ void *gHeap = (void *) nullptr;
 
 
 unsigned int calc_needed_page_size(unsigned int size){
-    unsigned int page_header_size = 6 * sizeof(unsigned int) + sizeof (void *);
+    unsigned int page_header_size = 6 * sizeof(unsigned int) + 2 * sizeof (void *);
     unsigned int base_page_size = 4096;  // 4kb
     unsigned interest = ((size + page_header_size) % base_page_size) ? 1 : 0;
     return (((size + page_header_size) / base_page_size) + interest ) * base_page_size;
+}
+
+
+unsigned int get_page_size(void *ptr){
+    return ((unsigned int *)ptr)[2];
 }
 
 
@@ -123,9 +128,13 @@ void *get_prev_block(void *ptr){
 }
 
 void *get_next_page(void *ptr){
-    unsigned int block_size = get_block_size(ptr);
+    unsigned int block_size = get_page_size(ptr);
     char *cp = (char *)ptr;
     return (void *)(((int **)(cp + block_size - 8))[0]);
+}
+
+void *get_prev_page(void *ptr){
+    return (void *)(((int **)ptr)[0]);
 }
 
 void print_block_as_uint(void *ptr){
@@ -172,17 +181,17 @@ void setup_block(void *ptr, unsigned int size){
 }
 
 void init_heap_page(void *ptr, unsigned int page_size){
-    unsigned int page_header_size = 6 * sizeof(unsigned int) + sizeof (void *);
+    unsigned int page_header_size = (6 * sizeof(unsigned int)) + (2 * sizeof (void *));
 
-    // Create two void pointers
-    int **glob_heap = (int **) &gHeap;
-    
+    // Create two void pointers    
     unsigned int block_size = page_size-page_header_size;
 
-    unsigned int *page_start = (unsigned int *)ptr ;
+    int **heap_page_start = (int **) ptr;
+    unsigned int *page_start = (unsigned int *)&heap_page_start[1] ;
     unsigned int *block_end = page_start + 3 + (block_size/sizeof(unsigned int));
     int **heap_page_end = (int **) &block_end[3];
 
+    heap_page_start[0] = nullptr;
     page_start[0] = page_size;
     page_start[1] = 0;
     setup_block(&page_start[2], block_size);
@@ -190,8 +199,11 @@ void init_heap_page(void *ptr, unsigned int page_size){
     block_end[2] = page_size - sizeof(void *); // actually 8 bytes smaller because of the pointer at the end
     heap_page_end[0] =  (int *) gHeap;
 
+    if (gHeap!= nullptr){
+        ((int **)gHeap)[0] =(int *) ptr;
+    }
     //reassign the first heap page to be the new heap page
-    glob_heap[0] = (int *) ptr;
+    gHeap = ptr;
     
 }
 
@@ -253,13 +265,17 @@ void page_free(void* ptr){
     }
 }
 
+void *get_first_block_in_page(void *ptr){
+    return (void *)(&((unsigned int *)ptr)[4]);
+}
+
 void *find_best_fit_block_in_page(void *page_ptr, unsigned int size){
     // iterate over a page looking for the best block to allocate, would return a pointer - 
     void *best_fit_block = nullptr;
     unsigned int best_fit_block_size_difference = -1; // highest int because it's unsigned
     bool reached_end_of_page = false;
 
-    void *block = (void *)(&((unsigned int *)page_ptr)[2]);
+    void *block = get_first_block_in_page(page_ptr);
     unsigned int block_size = get_block_size(block);
 
     while (!reached_end_of_page){
@@ -320,7 +336,7 @@ void *find_first_fit_block_in_page(void *page_ptr, unsigned int size){
     void *fit_block = nullptr;
     bool reached_end_of_page = false;
 
-    void *block = (void *)(&((unsigned int *)page_ptr)[2]);
+    void *block = get_first_block_in_page(page_ptr);
     unsigned int block_size = get_block_size(block);
 
     while (!reached_end_of_page){
@@ -377,7 +393,7 @@ void *halloc(unsigned int size){
 
 
 bool check_page_allocated(void *page_ptr){
-    void *block = (void *)(&((unsigned int *)page_ptr)[2]);
+    void *block = get_first_block_in_page(page_ptr);
     unsigned int block_size;
     bool reached_end_of_page = false;
     while (!reached_end_of_page){
@@ -399,7 +415,7 @@ void *get_page_ptr(void *block){
     unsigned int block_size;
     while(true){
         if (get_prev_block_size(block) == 0){
-            return (unsigned int *)block - 2;
+            return (unsigned int *)block - 4;
         }
         block = get_prev_block(block);
     }
@@ -417,7 +433,10 @@ void coalesce_block_leftward(void *ptr){
 void hfree(void *ptr){
     mark_block_free(ptr);
     void *page_ptr = get_page_ptr(ptr);
+    void *next_page_ptr = get_next_page(page_ptr);
     if (!check_page_allocated(page_ptr)){
+        // need to make sure linked pages are handled, maybe need to change gHeap...
+
         page_free(page_ptr);
     }
     else{
