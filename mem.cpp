@@ -110,6 +110,11 @@ void *get_next_block(void *ptr){
     return cp + (2 * sizeof(unsigned int)) + block_size;
 }
 
+unsigned int get_prev_block_size(void *ptr){
+    unsigned int *prev_block_end = ((unsigned int *)ptr) -1;
+    return get_block_size(prev_block_end);
+}
+
 void *get_prev_block(void *ptr){
     unsigned int *prev_block_end = ((unsigned int *)ptr) -1;
     unsigned int block_size = get_block_size(prev_block_end);
@@ -286,11 +291,63 @@ void *find_best_fit_block_in_page(void *page_ptr, unsigned int size){
 
 void *find_best_fit_block(unsigned int size){
     // iterate over all pages looking for the best block to allocate
+    void *block;
+    void *best_fit_block = (void *)-1;
+    unsigned int block_size;
+    unsigned int best_fit_block_size_difference = -1; // highest int because it's unsigned
+    void *page = gHeap;
+
+    while (page!=nullptr){
+        block = find_best_fit_block_in_page(page, size);
+        if (block!=(void *)-1){
+            block_size = get_block_size(block);
+            if ((best_fit_block_size_difference > block_size - size)){
+                best_fit_block = block;
+                best_fit_block_size_difference = block_size - size;
+            }
+            if (best_fit_block_size_difference==0){
+                return best_fit_block;
+            }
+        }
+        page = get_next_page(page);
+    }
+
+    return best_fit_block;
+}
+
+void *find_first_fit_block_in_page(void *page_ptr, unsigned int size){
+    // iterate over a page looking for the best block to allocate, would return a pointer - 
+    void *fit_block = nullptr;
+    bool reached_end_of_page = false;
+
+    void *block = (void *)(&((unsigned int *)page_ptr)[2]);
+    unsigned int block_size = get_block_size(block);
+
+    while (!reached_end_of_page){
+        if ((block_size >= size) 
+         && (!check_block_allocated(block))) {
+            return (void *)block;
+        }
+        //advance the block
+        block = get_next_block(block);
+        block_size = get_block_size(block);
+        if (block_size == 0){
+            reached_end_of_page = true;
+        }
+    }
+    
+    
+    return (void *) -1;
+}
+
+
+void *find_first_fit_block(unsigned int size){
+    // iterate over all pages looking for the best block to allocate
     void *best_fit_block = (void *)-1;
     void *page = gHeap;
 
     while (page!=nullptr){
-        best_fit_block = find_best_fit_block_in_page(page, size);
+        best_fit_block = find_first_fit_block_in_page(page, size);
         if (best_fit_block!=(void *)-1){
             return best_fit_block;
         }
@@ -299,7 +356,6 @@ void *find_best_fit_block(unsigned int size){
 
     return best_fit_block;
 }
-
 
 void *halloc(unsigned int size){
     void *block = find_best_fit_block(size);
@@ -312,11 +368,7 @@ void *halloc(unsigned int size){
         std::cout << "got address: " << new_heap  << std::endl;
         init_heap_page(new_heap, page_size);
         
-        block = find_best_fit_block_in_page(new_heap, size);
-        partition_heap_block(block, size);
-        mark_block_allocated(block);
-
-        return block;
+        block = find_first_fit_block_in_page(new_heap, size);
     }
     partition_heap_block(block, size);
     mark_block_allocated(block);
@@ -343,8 +395,14 @@ bool check_page_allocated(void *page_ptr){
     return false;
 }
 
-void *get_page_ptr(void *block_ptr){
-    
+void *get_page_ptr(void *block){
+    unsigned int block_size;
+    while(true){
+        if (get_prev_block_size(block) == 0){
+            return (unsigned int *)block - 2;
+        }
+        block = get_prev_block(block);
+    }
 }
 
 void hfree(void *ptr){
@@ -353,9 +411,9 @@ void hfree(void *ptr){
     if (!check_page_allocated(page_ptr)){
         page_free(page_ptr);
     }
-    else{
-        coalesce_block_left(ptr);
-    }
+    // else{
+    //     // coalesce_block_leftward(ptr);
+    // }
 }
 
 
@@ -367,13 +425,13 @@ int main() {
     
 
 
-    void* pt = halloc(40);
-    std::cout << "address of memblock: " << pt << std::endl;
-    print_block_as_uint(gHeap);
+    // void* pt = halloc(40);
+    // std::cout << "address of memblock: " << pt << std::endl;
+    // print_block_as_uint(gHeap);
 
-    void* pt1 = halloc(900);
-    std::cout << "address of memblock: " << pt1 << std::endl;
-    print_block_as_uint(gHeap);
+    // void* pt1 = halloc(900);
+    // std::cout << "address of memblock: " << pt1 << std::endl;
+    // print_block_as_uint(gHeap);
 
 
 
@@ -381,51 +439,10 @@ int main() {
     std::cout << "address of memblock: " << pt2 << std::endl;
     print_block_as_uint(gHeap);
 
-
+    hfree(pt2);
     std::cout << "address of glob_heap: " << gHeap << std::endl;
 
 
-
-    // // Create two void pointers
-    // int **glob_heap = (int **) &gHeap;
-    // std::cout << "address of glob_heap: " << &gHeap << std::endl;
-    // glob_heap[0] = (int *) pt;
-    // std::cout << "address of glob_heap: " << gHeap << std::endl;
-
-    // char *page_pointer_char = (char *) pt; 
-    // int **int_pointer = (int **) pt;
-    // unsigned int *uip = (unsigned int *)pt + 2;
-    // unsigned int *uip_end = (unsigned int *)(page_pointer_char +  size);
-    // int **heap_page_end = (int **) (uip_end + 3);
-
-    // int_pointer[0] = (int *)pt;
-    // uip[0] = calc_needed_page_size(size);
-    // uip[1] = 0;
-    // uip[2] = size; 
-    // uip_end[0] = size;
-    // uip_end[1] = 0;
-    // uip_end[2] = calc_needed_page_size(size);
-    // heap_page_end[0] =  (int *) gHeap;
-
-
-    // // cp[6] = 42;
-    // // Print the contents of the memory
-    // for (int i = 0; i < 64; ++i) {
-    //     std::cout << int_pointer[i] << " ";
-    // }
-    // std::cout << std::endl;
-    // std::cout << std::endl;
-    // for (int i = 0; i < 64; ++i) {
-    //     std::cout << uip[i] << " ";
-    // }
-    // std::cout << std::endl;
-    // std::cout << std::endl;
-    // for (int i = 0; i < 5; ++i) {
-    //     std::cout << uip_end[i] << " ";
-    // }
-
-    // std::cout << std::endl;
-    // std::cout << heap_page_end[0];
     unsigned int t = 12+ 1;
     t = t & 1;
     std::cout << t << std::endl;
