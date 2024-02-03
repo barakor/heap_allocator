@@ -539,9 +539,52 @@ int main() {
     // print_page_as_uint(gHeap);
     print_all_pages_as_uint();
 
+    void* pt3 = halloc(4000);
+    std::cout << "address of memblock: " << pt3 << std::endl;
+    std::cout << "address of gHeap: " << gHeap << std::endl;
+    // print_page_as_uint(gHeap);
+    print_all_pages_as_uint();
+
+    void* pt4 = halloc(4);
+    std::cout << "address of memblock: " << pt4 << std::endl;
+    std::cout << "address of gHeap: " << gHeap << std::endl;
+    // print_page_as_uint(gHeap);
+    print_all_pages_as_uint();
+
+
+    void* pt5 = halloc(150);
+    std::cout << "address of memblock: " << pt5 << std::endl;
+    std::cout << "address of gHeap: " << gHeap << std::endl;
+    // print_page_as_uint(gHeap);
+    print_all_pages_as_uint();
+
     hfree(pt2);
     std::cout << "address of glob_heap: " << gHeap << std::endl;
     print_all_pages_as_uint();
+
+    hfree(pt1);
+    std::cout << "address of glob_heap: " << gHeap << std::endl;
+    print_all_pages_as_uint();
+    
+    hfree(pt3);
+    std::cout << "address of glob_heap: " << gHeap << std::endl;
+    print_all_pages_as_uint();
+    
+    hfree(pt4);
+    std::cout << "address of glob_heap: " << gHeap << std::endl;
+    print_all_pages_as_uint();
+    
+    hfree(pt5);
+    std::cout << "address of glob_heap: " << gHeap << std::endl;
+    print_all_pages_as_uint();
+    
+    hfree(pt);
+    std::cout << "address of glob_heap: " << gHeap << std::endl;
+    print_all_pages_as_uint();
+
+    pt5 = halloc(150);
+    print_all_pages_as_uint();
+    std::cout << "address of glob_heap: " << gHeap << std::endl;
 
     unsigned int t = 12+ 1;
     t = t & 1;
