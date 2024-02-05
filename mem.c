@@ -277,7 +277,7 @@ void init_heap_page(void *ptr, unsigned int page_size){
     int **glob_heap = (int **) &gHeap;
     int **heap_page_start = (int **) ptr;
     unsigned int *page_start = (unsigned int *)&heap_page_start[1] ;
-    unsigned int *block_end = page_start + 3 + (block_size/sizeof(unsigned int));
+    unsigned int *block_end = (unsigned int *)(((char *)(page_start + 3)) + block_size);
 
     set_prev_page_ptr(ptr, (void *)-1);
     page_start[0] = page_size;
